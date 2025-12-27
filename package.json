@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-minimax-vits",
   "description": "使用 minimax 国际版生成语音，适配 chatluna",
-  "version": "0.0.1",
+  "version": "1.0.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [

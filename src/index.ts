@@ -3,36 +3,29 @@ import { Context, Schema, h } from 'koishi'
 export const name = 'minimax-vits'
 
 export interface Config {
-  apiKey: string
-  groupId: string
+  ttsApiKey: string
   apiBase?: string
-  model?: string
-  temperature?: number
-  maxTokens?: number
-  ttsEnabled?: boolean
-  ttsApiKey?: string
   defaultVoice?: string
   speechModel?: string
+  speed?: number
+  vol?: number
+  pitch?: number
+  audioFormat?: string
   debug?: boolean
 }
 
 export const Config: Schema<Config> = Schema.object({
-  apiKey: Schema.string().required().description('MiniMax API Key').role('secret'),
-  groupId: Schema.string().required().description('MiniMax Group ID'),
+  ttsApiKey: Schema.string().required().description('MiniMax TTS API Key').role('secret'),
   apiBase: Schema.string().default('https://api.minimaxi.com/v1').description('API 基础地址'),
-  model: Schema.string().default('abab6.5s-chat').description('使用的模型名称'),
-  temperature: Schema.number().default(0.7).min(0).max(2).description('温度参数 (0-2)'),
-  maxTokens: Schema.number().default(2048).min(1).max(4096).description('最大 token 数'),
-  ttsEnabled: Schema.boolean().default(false).description('是否启用 TTS 功能'),
-  ttsApiKey: Schema.string().description('TTS API Key（如果与主 API Key 不同）').role('secret'),
   defaultVoice: Schema.string().default('Chinese_female_gentle').description('默认语音 ID'),
-  speechModel: Schema.string().default('speech-2.6').description('TTS 模型名称'),
+  speechModel: Schema.string().default('speech-2.6-hd').description('TTS 模型名称 (speech-2.6-hd, speech-2.6-turbo, speech-02-hd, speech-02-turbo)'),
+  speed: Schema.number().default(1.0).min(0.5).max(2.0).description('语速 (0.5-2.0)'),
+  vol: Schema.number().default(1.0).min(0.1).max(10.0).description('音量 (0.1-10.0)'),
+  pitch: Schema.number().default(0).min(-12).max(12).description('音调 (-12 到 12)'),
+  audioFormat: Schema.string().default('mp3').description('音频格式 (mp3, pcm, flac, wav)'),
   debug: Schema.boolean().default(false).description('启用调试模式（输出详细日志）'),
 }).description('MiniMax VITS 配置')
 
-/**
- * 调用 MiniMax TTS API 生成语音
- */
 async function generateSpeech(
   ctx: Context,
   config: Config,
@@ -40,9 +33,8 @@ async function generateSpeech(
   voice?: string
 ): Promise<Buffer | null> {
   const logger = ctx.logger('minimax-vits')
-  const apiKey = config.ttsApiKey || config.apiKey
   const apiBase = config.apiBase || 'https://api.minimaxi.com/v1'
-  const model = config.speechModel || 'speech-2.6'
+  const model = config.speechModel || 'speech-2.6-hd'
   const voiceId = voice || config.defaultVoice || 'Chinese_female_gentle'
 
   if (config.debug) {
@@ -57,10 +49,14 @@ async function generateSpeech(
         model,
         voice_id: voiceId,
         text,
+        speed: config.speed || 1.0,
+        vol: config.vol || 1.0,
+        pitch: config.pitch || 0,
+        audio_format: config.audioFormat || 'mp3',
       },
       {
         headers: {
-          'Authorization': `Bearer ${apiKey}`,
+          'Authorization': `Bearer ${config.ttsApiKey}`,
           'Content-Type': 'application/json',
         },
         responseType: 'arraybuffer',
@@ -88,45 +84,41 @@ export function apply(ctx: Context, config: Config) {
   
   if (config.debug) {
     logger.info('调试模式已启用')
-    logger.debug(`API Key: ${config.apiKey ? '已配置' : '未配置'}`)
-    logger.debug(`Group ID: ${config.groupId || '未配置'}`)
+    logger.debug(`TTS API Key: ${config.ttsApiKey ? '已配置' : '未配置'}`)
     logger.debug(`API Base: ${config.apiBase || 'https://api.minimaxi.com/v1'}`)
-    logger.debug(`TTS Enabled: ${config.ttsEnabled || false}`)
+    logger.debug(`默认语音: ${config.defaultVoice || 'Chinese_female_gentle'}`)
+    logger.debug(`TTS 模型: ${config.speechModel || 'speech-2.6-hd'}`)
   } else {
-    logger.info(`API Key: ${config.apiKey ? '已配置' : '未配置'}`)
-    logger.info(`Group ID: ${config.groupId || '未配置'}`)
-  }
-  
-  if (config.ttsEnabled) {
-    logger.info('TTS 功能已启用')
+    logger.info(`TTS API Key: ${config.ttsApiKey ? '已配置' : '未配置'}`)
   }
 
-  // 注册测试指令
   ctx.command('minivits.test <text:text>', '测试 MiniMax TTS 功能')
-    .option('voice', '-v <voice>', { fallback: config.defaultVoice || 'Chinese_female_gentle' })
+    .option('voice', '-v <voice>', { fallback: '' })
+    .option('speed', '-s <speed>', { fallback: 0 })
+    .option('vol', '-l <vol>', { fallback: 0 })
+    .option('pitch', '-p <pitch>', { fallback: 0 })
     .action(async ({ session, options }, text) => {
       if (!session) {
         return '会话不存在'
       }
 
       if (!text) {
-        return '请提供要测试的文本内容。\n用法: minivits.test <文本内容> [-v <语音ID>]'
-      }
-
-      if (!config.ttsEnabled) {
-        return 'TTS 功能未启用，请在配置中设置 ttsEnabled: true'
+        return '请提供要测试的文本内容。\n用法: minivits.test <文本内容> [-v <语音ID>] [-s <语速>] [-l <音量>] [-p <音调>]'
       }
 
       const logger = ctx.logger('minimax-vits')
       const voiceId = options?.voice || config.defaultVoice || 'Chinese_female_gentle'
+      const speed = options?.speed || config.speed || 1.0
+      const vol = options?.vol || config.vol || 1.0
+      const pitch = options?.pitch || config.pitch || 0
       
       if (config.debug) {
-        logger.debug(`收到测试请求: text=${text}, voice=${voiceId}`)
+        logger.debug(`收到测试请求: text=${text}, voice=${voiceId}, speed=${speed}, vol=${vol}, pitch=${pitch}`)
       }
 
       await session.send('正在生成语音，请稍候...')
 
-      const audioBuffer = await generateSpeech(ctx, config, text, voiceId)
+      const audioBuffer = await generateSpeech(ctx, { ...config, speed, vol, pitch }, text, voiceId)
 
       if (!audioBuffer) {
         return '语音生成失败，请检查配置和网络连接'
@@ -136,23 +128,26 @@ export function apply(ctx: Context, config: Config) {
         logger.debug(`语音生成成功，大小: ${audioBuffer.length} bytes`)
       }
 
-      // 发送语音文件（使用 base64 编码）
-      return h('audio', { src: `base64://${audioBuffer.toString('base64')}`, type: 'audio/mpeg' })
+      const mimeType = config.audioFormat === 'mp3' ? 'audio/mpeg' : 
+                       config.audioFormat === 'wav' ? 'audio/wav' :
+                       config.audioFormat === 'flac' ? 'audio/flac' : 'audio/pcm'
+
+      return h('audio', { src: `base64://${audioBuffer.toString('base64')}`, type: mimeType })
     })
 
-  // 注册调试信息查看指令
   ctx.command('minivits.debug', '查看 MiniMax VITS 插件调试信息')
     .action(() => {
       const info = [
         '=== MiniMax VITS 插件调试信息 ===',
-        `API Key: ${config.apiKey ? '已配置' : '未配置'}`,
-        `Group ID: ${config.groupId || '未配置'}`,
+        `TTS API Key: ${config.ttsApiKey ? '已配置' : '未配置'}`,
         `API Base: ${config.apiBase || 'https://api.minimaxi.com/v1'}`,
-        `模型: ${config.model || 'abab6.5s-chat'}`,
-        `TTS 功能: ${config.ttsEnabled ? '已启用' : '已禁用'}`,
+        `默认语音: ${config.defaultVoice || 'Chinese_female_gentle'}`,
+        `TTS 模型: ${config.speechModel || 'speech-2.6-hd'}`,
+        `语速: ${config.speed || 1.0}`,
+        `音量: ${config.vol || 1.0}`,
+        `音调: ${config.pitch || 0}`,
+        `音频格式: ${config.audioFormat || 'mp3'}`,
         `调试模式: ${config.debug ? '已启用' : '已禁用'}`,
-        config.ttsEnabled ? `默认语音: ${config.defaultVoice || 'Chinese_female_gentle'}` : '',
-        config.ttsEnabled ? `TTS 模型: ${config.speechModel || 'speech-2.6'}` : '',
         '==============================',
       ].filter(Boolean).join('\n')
       
