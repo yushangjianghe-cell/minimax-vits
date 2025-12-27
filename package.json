@@ -6,17 +6,31 @@
   "typings": "lib/index.d.ts",
   "files": [
     "lib",
-    "dist"
+    "dist",
+    "readme.md"
   ],
   "license": "MIT",
-  "scripts": {},
   "keywords": [
     "chatbot",
     "koishi",
-    "plugin"
+    "plugin",
+    "minimax",
+    "tts",
+    "vits",
+    "chatluna"
   ],
-  "devDependencies": {},
   "peerDependencies": {
-    "koishi": "4.18.10"
-  }
+    "koishi": "^4.18.10"
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yushangjianghe-cell/minimax-vits.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yushangjianghe-cell/minimax-vits.git"
+  },
+  "homepage": "https://github.com/yushangjianghe-cell/minimax-vits.git"
 }
