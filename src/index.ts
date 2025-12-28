@@ -74,10 +74,9 @@ function extractDialogueContent(text: string): string | null {
   return null
 }
 
-// --- 辅助：构建音频消息元素 (Web兼容修正) ---
+// --- 辅助：构建音频消息元素 ---
 function makeAudioElement(buffer: Buffer, format: string) {
   const mimeType = format === 'wav' ? 'audio/wav' : 'audio/mpeg'
-  // 沙盒环境必须使用标准的 data: 协议
   const src = `data:${mimeType};base64,${buffer.toString('base64')}`
   return h('audio', { src })
 }
@@ -96,9 +95,13 @@ export class MinimaxVitsTool extends Tool {
     super()
   }
 
-  async _call(input: string, _runManager: any, toolConfig: ChatLunaToolRunnable) {
+  async _call(input: string, _runManager: any, toolConfig: any) {
     try {
-      const session = toolConfig.configurable.session
+      const session = toolConfig?.configurable?.session
+      if (!session) {
+        throw new Error('Session not found in tool config')
+      }
+
       let params: any = {}
       try {
         params = JSON.parse(input)
@@ -321,31 +324,37 @@ async function generateSpeech(
   }
 }
 
-// 找回的函数：文件上传
+// 修正：返回值类型改为 string | undefined，匹配调用处的类型
 async function uploadFile(
   ctx: Context,
   config: Config,
   filePath: string,
   purpose: 'voice_clone' | 'prompt_audio'
-): Promise<string | null> {
+): Promise<string | undefined> {
   const logger = ctx.logger('minimax-vits')
   try {
     const headers: any = { 'Authorization': `Bearer ${config.ttsApiKey}` }
     if (config.groupId) headers['GroupId'] = config.groupId
 
+    const fileRes = await ctx.http.file(filePath)
+    
+    // 如果没有 Blob 类型（Node 低版本），需要 polyfill 或者忽略类型报错
+    // 此处假设环境支持，使用 new Blob 包装 buffer
+    const blob = new Blob([fileRes.data], { type: fileRes.mime })
+    
     const formData = new FormData()
-    formData.append('file', await ctx.http.file(filePath))
+    formData.append('file', blob, fileRes.filename || 'upload.mp3')
     formData.append('purpose', purpose)
 
     const response = await ctx.http.post(`${config.apiBase}/files/upload`, formData, { headers })
-    return response.file?.file_id || null
+    return response.file?.file_id || undefined
   } catch (error: any) {
     logger.error(`文件上传失败:`, error)
-    return null
+    return undefined
   }
 }
 
-// 找回的函数：语音克隆
+// 语音克隆逻辑
 async function cloneVoice(
   ctx: Context,
   config: Config,
@@ -357,17 +366,14 @@ async function cloneVoice(
 ): Promise<Buffer | null> {
   const logger = ctx.logger('minimax-vits')
   try {
-    // 基础克隆参数
     const payload: any = {
       file_id: fileId,
       voice_id: voiceId,
       model: config.speechModel ?? 'speech-01-turbo',
       audio_format: config.audioFormat ?? 'mp3',
     }
-    // 只有提供了文本才合成语音
     if (text) payload.text = text
     
-    // 复刻参数 (如果需要)
     if (promptAudioFileId && promptText) {
       payload.clone_prompt = { prompt_audio: promptAudioFileId, prompt_text: promptText }
     }
@@ -378,7 +384,7 @@ async function cloneVoice(
     }
     if (config.groupId) headers['GroupId'] = config.groupId
 
-    const response = await ctx.http.post(
+    const response = await ctx.http.post<ArrayBuffer>(
       `${config.apiBase}/voice_clone`,
       payload,
       { headers, responseType: 'arraybuffer' }
@@ -394,10 +400,9 @@ async function cloneVoice(
 export function apply(ctx: Context, config: Config) {
   const logger = ctx.logger('minimax-vits')
   
-  // 1. 初始化 ChatLuna
-  const chatLunaPlugin = new ChatLunaPlugin(ctx, config, 'minimax-vits', false)
+  // 修正：这里使用 config as any 规避类型检查，因为 ChatLunaPlugin 需要的某些配置字段（如 proxy）我们没有定义
+  const chatLunaPlugin = new ChatLunaPlugin(ctx, config as any, 'minimax-vits', false)
 
-  // 2. 初始化缓存
   const cacheManager = config.cacheEnabled
     ? new AudioCacheManager(
         config.cacheDir ?? './data/minimax-vits/cache', 
@@ -433,7 +438,6 @@ export function apply(ctx: Context, config: Config) {
 
   // --- 指令注册区 ---
 
-  // 1. 常规测试指令
   ctx.command('minivits.test <text:text>', '测试 TTS')
     .option('voice', '-v <voice>')
     .option('speed', '-s <speed>', { type: 'number' })
@@ -450,17 +454,15 @@ export function apply(ctx: Context, config: Config) {
       return makeAudioElement(buffer, config.audioFormat ?? 'mp3')
     })
 
-  // 2. 找回的 Debug 指令
   ctx.command('minivits.debug', '查看插件配置').action(() => {
     return `API Base: ${config.apiBase}\nModel: ${config.speechModel}\nFormat: ${config.audioFormat}\nDebug: ${config.debug}`
   })
 
-  // 3. 找回的语音克隆指令集
   if (config.voiceCloneEnabled) {
     ctx.command('minivits.clone.upload <filePath> <purpose>', '上传文件')
       .action(async ({ session }, filePath, purpose) => {
         if (!session || !filePath || !purpose) return '缺少参数'
-        if (purpose !== 'voice_clone' && purpose !== 'prompt_audio') return '用途错误 (valid: voice_clone, prompt_audio)'
+        if (purpose !== 'voice_clone' && purpose !== 'prompt_audio') return '用途错误'
         
         await session.send('上传中...')
         const fileId = await uploadFile(ctx, config, filePath, purpose)
@@ -471,20 +473,19 @@ export function apply(ctx: Context, config: Config) {
       .option('promptAudio', '-p <id>')
       .option('promptText', '-t <text>')
       .action(async ({ session, options }, fileId, voiceId, text) => {
-        if (!session || !fileId || !voiceId) return '缺少参数: fileId 和 voiceId 必填'
+        if (!session || !fileId || !voiceId) return '缺少参数'
         await session.send('克隆中...')
         
         const audioBuffer = await cloneVoice(ctx, config, fileId, voiceId, options?.promptAudio, options?.promptText, text)
         if (!audioBuffer) return '克隆失败'
 
-        // 如果提供了文本，说明是一次合成请求，返回音频；否则可能只是注册克隆
         if (text) {
           return makeAudioElement(audioBuffer, config.audioFormat ?? 'mp3')
         }
         return '克隆操作请求已发送'
       })
 
-    ctx.command('minivits.clone.full <sourceFile> <voiceId> <text:text>', '完整克隆流程(上传+合成)')
+    ctx.command('minivits.clone.full <sourceFile> <voiceId> <text:text>', '完整克隆流程')
       .option('promptFile', '-p <file>')
       .option('promptText', '-t <text>')
       .action(async ({ session, options }, sourceFile, voiceId, text) => {
