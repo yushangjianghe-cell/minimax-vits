@@ -16,7 +16,13 @@
     "jsx": "preserve",
     "jsxImportSource": "vue",
     "noImplicitAny": false,
-    "strictNullChecks": false
+    "strictNullChecks": false,
+    "removeComments": false,
+    "moduleDetection": "force",
+    "baseUrl": "./src",
+    "paths": {
+      "*": ["*", "*.ts", "*.tsx"]
+    }
   },
   "include": [
     "src/**/*.ts",
