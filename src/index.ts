@@ -82,7 +82,7 @@ function makeAudioElement(buffer: Buffer, format: string) {
 }
 
 // --- ChatLuna Tool 类 ---
-export class MinimaxVitsTool extends Tool {
+export class MinimaxVitsTool {
   name = 'minimax_tts'
   description = `Use this tool to generate speech/audio from text using MiniMax TTS.
   Input MUST be a JSON string: {"text": "required content", "voice": "optional_id", "speed": 1.0}`
@@ -91,11 +91,9 @@ export class MinimaxVitsTool extends Tool {
     private ctx: Context,
     private config: Config,
     private cacheManager?: AudioCacheManager
-  ) {
-    super()
-  }
+  ) {}
 
-  async _call(input: string, _runManager: any, toolConfig: any) {
+  async call(input: string, toolConfig: any) {
     try {
       const session = toolConfig?.configurable?.session
       if (!session) {
@@ -134,11 +132,34 @@ export class MinimaxVitsTool extends Tool {
       return `Error: ${e.message}`
     }
   }
+
+  // 兼容ChatLuna的工具接口
+  async invoke(input: any, options?: any) {
+    return this.call(JSON.stringify(input), options)
+  }
+  
+  // 兼容ChatLuna的工具接口
+  get lc_namespace() {
+    return ['minimax', 'tts']
+  }
 }
 
 // --- Console Service ---
 class MinimaxVitsService {
   constructor(private ctx: Context, private config: Config) { }
+  
+  // 获取当前配置
+  getConfig() {
+    return { ...this.config }
+  }
+  
+  // 更新配置
+  updateConfig(newConfig: Partial<Config>) {
+    Object.assign(this.config, newConfig)
+    return this.getConfig()
+  }
+  
+  // 测试TTS
   async testTTS(text: string, voice?: string, speed?: number) {
     try {
       const audioBuffer = await generateSpeech(this.ctx, {
@@ -158,6 +179,33 @@ class MinimaxVitsService {
       return { success: false, error: error.message }
     }
   }
+  
+  // 获取可用语音列表
+  getAvailableVoices() {
+    return [
+      'Chinese_female_gentle',
+      'Chinese_female_vitality',
+      'Chinese_male_calm',
+      'Chinese_male_young',
+      'English_female_casual',
+      'English_male_professional'
+    ]
+  }
+  
+  // 验证API Key
+  async validateApiKey(apiKey: string) {
+    try {
+      // 简单验证，检查API Key格式
+      if (!apiKey || apiKey.length < 10) {
+        return { valid: false, message: 'API Key格式无效' }
+      }
+      
+      // 可以添加更复杂的验证，例如调用API检查
+      return { valid: true, message: 'API Key格式有效' }
+    } catch (error: any) {
+      return { valid: false, message: error.message }
+    }
+  }
 }
 
 export const name = 'minimax-vits'
@@ -171,11 +219,11 @@ export interface Config {
   speed?: number
   vol?: number
   pitch?: number
-  audioFormat?: string
-  sampleRate?: number
-  bitrate?: number
-  outputFormat?: string
-  languageBoost?: string
+  audioFormat?: 'mp3' | 'wav'
+  sampleRate?: 16000 | 24000 | 32000 | 44100 | 48000
+  bitrate?: 64000 | 96000 | 128000 | 192000 | 256000
+  outputFormat?: 'hex'
+  languageBoost?: 'auto' | 'zh' | 'en'
   debug?: boolean
   voiceCloneEnabled?: boolean
   cacheEnabled?: boolean
@@ -191,19 +239,38 @@ export const Config: Schema<Config> = Schema.object({
   defaultVoice: Schema.string().default('Chinese_female_gentle').description('默认语音 ID'),
   speechModel: Schema.string().default('speech-01-turbo').description('TTS 模型 (推荐 speech-01-turbo)'),
   speed: Schema.number().default(1.0).min(0.5).max(2.0).description('语速'),
-  vol: Schema.number().default(1.0).description('音量'),
-  pitch: Schema.number().default(0).description('音调'),
-  audioFormat: Schema.string().default('mp3').description('音频格式 (mp3, wav)'),
-  sampleRate: Schema.number().default(32000).description('采样率'),
-  bitrate: Schema.number().default(128000).description('比特率'),
-  outputFormat: Schema.string().default('hex').description('API输出编码 (必须是 hex)'),
-  languageBoost: Schema.string().default('auto').description('语言增强'),
+  vol: Schema.number().default(1.0).min(0.0).max(2.0).description('音量'),
+  pitch: Schema.number().default(0).min(-12).max(12).description('音调'),
+  audioFormat: Schema.union([
+    Schema.const('mp3').description('MP3 格式'),
+    Schema.const('wav').description('WAV 格式')
+  ]).default('mp3').description('音频格式'),
+  sampleRate: Schema.union([
+    Schema.const(16000),
+    Schema.const(24000),
+    Schema.const(32000),
+    Schema.const(44100),
+    Schema.const(48000)
+  ]).default(32000).description('采样率'),
+  bitrate: Schema.union([
+    Schema.const(64000),
+    Schema.const(96000),
+    Schema.const(128000),
+    Schema.const(192000),
+    Schema.const(256000)
+  ]).default(128000).description('比特率'),
+  outputFormat: Schema.const('hex').description('API输出编码 (必须是 hex)'),
+  languageBoost: Schema.union([
+    Schema.const('auto').description('自动'),
+    Schema.const('zh').description('中文'),
+    Schema.const('en').description('英文')
+  ]).default('auto').description('语言增强'),
   debug: Schema.boolean().default(false).description('启用调试日志'),
   voiceCloneEnabled: Schema.boolean().default(false).description('启用语音克隆'),
   cacheEnabled: Schema.boolean().default(true).description('启用本地文件缓存'),
   cacheDir: Schema.string().default('./data/minimax-vits/cache').description('缓存路径'),
-  cacheMaxAge: Schema.number().default(3600000).description('缓存有效期(ms)'),
-  cacheMaxSize: Schema.number().default(104857600).description('缓存最大体积(bytes)'),
+  cacheMaxAge: Schema.number().default(3600000).min(60000).description('缓存有效期(ms)'),
+  cacheMaxSize: Schema.number().default(104857600).min(1048576).max(1073741824).description('缓存最大体积(bytes)'),
 }).description('MiniMax VITS 配置')
 
 // --- 缓存管理器 ---
@@ -416,17 +483,19 @@ export function apply(ctx: Context, config: Config) {
   ctx.on('ready', async () => {
     await cacheManager?.initialize()
     if (ctx.console) {
+      // 注册控制台服务
       ctx.console.services['minimax-vits'] = new MinimaxVitsService(ctx, config)
     }
 
     try {
+      // 简化ChatLuna工具注册，避免类型复杂性
       chatLunaPlugin.registerTool('minimax_tts', {
         selector: (history: any) => history.some((item: any) => fuzzyQuery(
           getMessageContent(item.content),
           ['语音', '朗读', 'tts', 'speak', 'say', 'voice']
         )),
-        createTool: () => new MinimaxVitsTool(ctx, config, cacheManager),
-        authorization: () => true
+        createTool: () => new MinimaxVitsTool(ctx, config, cacheManager) as any,
+        authorization: (session: any) => true
       })
       logger.info('ChatLuna Tool 已注册')
     } catch (e: any) {
