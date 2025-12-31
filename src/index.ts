@@ -63,41 +63,34 @@ export function apply(ctx: Context, config: ConfigType) {
   let cacheManager: AudioCacheManager | undefined;
   const logger = ctx.logger('minimax-vits')
   
-  // 动态导入 ChatLunaPlugin，避免类型错误
-  // 使用类型断言确保构建时不会报错
-  let chatLunaPlugin: any = null
-  
-  // 使用 Promise.then() 替代 await，因为 apply 函数不能是 async
-  // @ts-ignore - 忽略类型检查，因为 koishi-plugin-chatluna 可能未安装
-  import('koishi-plugin-chatluna/services/chat').then(chatLunaModule => {
+  // 避免动态导入导致的模块状态冲突，改为使用简单的条件判断
+  // 仅在 ChatLuna 可能已安装时才尝试加载
+  try {
+    // 使用 require() 替代动态 import()
+    const chatLunaModule = require('koishi-plugin-chatluna/services/chat')
     const ChatLunaPlugin = chatLunaModule.ChatLunaPlugin
     if (ChatLunaPlugin) {
-      chatLunaPlugin = new ChatLunaPlugin(ctx, config as any, 'minimax-vits', false)
+      const chatLunaPlugin = new ChatLunaPlugin(ctx, config as any, 'minimax-vits', false)
       
       // 注册 ChatLuna Tool
-      try {
-        chatLunaPlugin.registerTool('minimax_tts', {
-          selector: (history: Array<{ content: unknown }>) => {
-            return history.some((item) =>
-              fuzzyQuery(
-                getMessageContent(item.content),
-                ['语音', '朗读', 'tts', 'speak', 'say', 'voice']
-              )
+      chatLunaPlugin.registerTool('minimax_tts', {
+        selector: (history: Array<{ content: unknown }>) => {
+          return history.some((item) =>
+            fuzzyQuery(
+              getMessageContent(item.content),
+              ['语音', '朗读', 'tts', 'speak', 'say', 'voice']
             )
-          },
-          createTool: () => new MinimaxVitsTool(ctx, config, cacheManager),
-          authorization: () => true
-        })
-        logger.info('ChatLuna Tool 已注册')
-      } catch (error: unknown) {
-        const errorMessage = error instanceof Error ? error.message : String(error)
-        logger.warn('ChatLuna Tool 注册失败:', errorMessage)
-      }
+          )
+        },
+        createTool: () => new MinimaxVitsTool(ctx, config, cacheManager),
+        authorization: () => true
+      })
+      logger.info('ChatLuna Tool 已注册')
     }
-  }).catch(error => {
+  } catch (error: unknown) {
     // ChatLuna 插件未安装，跳过
-    logger.debug('ChatLuna 插件未安装，跳过 Tool 注册')
-  })
+    logger.debug('ChatLuna 插件未安装或加载失败，跳过 Tool 注册')
+  }
 
   // 创建或更新缓存管理器
   if (config.cacheEnabled) {
@@ -153,12 +146,14 @@ export function apply(ctx: Context, config: ConfigType) {
           
           // 注册控制台页面
           if (typeof ctxWithConsole.console.addEntry === 'function') {
+            // 使用 require() 替代动态 import()
+            const ConsoleComponent = require('./console').default;
             ctxWithConsole.console.addEntry({
               id: 'minimax-vits',
               order: 500,
               title: 'MiniMax VITS',
               icon: 'activity:microphone',
-              component: () => import('./console')
+              component: ConsoleComponent
             });
             logger.info('MiniMax VITS 控制台页面已注册');
           }
