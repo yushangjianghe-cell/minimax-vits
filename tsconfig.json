@@ -1,23 +1,17 @@
 {
   "compilerOptions": {
-    "module": "ESNext",
-    "target": "ES2020",
-    "moduleResolution": "Bundler",
-    "outDir": "lib",
-    "rootDir": "src",
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
+    "module": "commonjs", 
+    "target": "ES2019",
+    "lib": ["ESNext"],
+    "moduleResolution": "node",
     "esModuleInterop": true,
-    "resolveJsonModule": true,
     "skipLibCheck": true,
-    "strict": false
+    "declaration": true,
+    "rootDir": "src",
+    "outDir": "lib",
+    "resolveJsonModule": true
   },
   "include": [
-    "src/**/*"
-  ],
-  "exclude": [
-    "node_modules",
-    "src/client"
+    "src"
   ]
 }
