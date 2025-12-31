@@ -10,21 +10,31 @@ import { makeAudioElement } from './utils'
 export const name = 'minimax-vits'
 
 // ==========================================
-// 模块 A: 文本清洗 (保留必要的清洗逻辑)
+// 模块 A: 文本清洗 (过滤非对话内容)
 // ==========================================
 function cleanModelOutput(text: string): string {
   if (!text) return ''
-  return text
-    // 1. 去除 DeepSeek/R1 等模型的思维链标签
+  
+  // 0. 预处理：移除 Koishi 的 XML 标签 (img, audio, video, file, at, quote 等)
+  // 使用正则匹配 <xxx ...> 或 <xxx .../> 或 </xxx>
+  // 注意：我们不想匹配普通的标点符号，所以要匹配标签特有的格式
+  let cleaned = text.replace(/<[\s\S]*?>/g, '')
+
+  return cleaned
+    // 1. 去除 DeepSeek/R1 等模型的思维链标签 (防止漏网之鱼)
     .replace(/<\|im_start\|>[\s\S]*?<\|im_end\|>/g, '')
-    // 2. 去除括号内的动作、神态等非对话描写
+    // 2. 去除括号内的动作、神态等非对话描写 (支持中英文括号)
     .replace(/（[^）]*）/g, '')
     .replace(/\([^)]*\)/g, '')
     // 3. 去除星号内的动作描写
     .replace(/\*([^*]*)\*/g, '')
-    // 4. 去除首尾空白
+    // 4. 去除多余的 Markdown 符号 (如加粗的 **)
+    .replace(/\*\*/g, '')
+    // 5. 将连续的空白字符替换为单个空格，并去除首尾空白
+    .replace(/\s+/g, ' ')
     .trim()
 }
+
 
 // ==========================================
 // 模块 B: 文本分段 (保留，用于长文本处理)
