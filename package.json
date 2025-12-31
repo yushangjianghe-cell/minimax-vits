@@ -1,9 +1,21 @@
 {
   "name": "koishi-plugin-minimax-vits",
   "description": "自用，使用 minimax 国际版生成语音，适配 chatluna",
-  "version": "1.5.6",
+  "version": "1.5.7",
+  "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    },
+    "./console": {
+      "types": "./lib/console.d.ts",
+      "import": "./lib/console.jsx"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "lib",
     "readme.md"
@@ -35,7 +47,7 @@
     "vue": "^3.3.0"
   },
   "scripts": {
-    "build": "tsc && tsc-alias -p tsconfig.json",
+    "build": "tsc && tsc-alias -p tsconfig.json && node fix-imports.js",
     "build:dev": "tsc --watch",
     "clean": "rm -rf lib",
     "prepublishOnly": "npm run build"
