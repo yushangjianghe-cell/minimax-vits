@@ -1,5 +1,4 @@
 // src/types.ts
-// 定义配置接口
 export interface Config {
   // 基础配置
   ttsApiKey: string
@@ -17,6 +16,15 @@ export interface Config {
   bitrate: 64000 | 96000 | 128000 | 192000 | 256000
   outputFormat: 'hex'
   languageBoost: 'auto' | 'zh' | 'en'
+
+  // 新增：自动语音配置
+  autoSpeech: {
+    enabled: boolean
+    onlyChatLuna: boolean
+    chatLunaBotId?: string
+    sendMode: 'voice_only' | 'text_and_voice' | 'mixed'
+    minLength: number
+  }
 
   // 功能开关
   debug: boolean
