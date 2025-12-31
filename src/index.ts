@@ -485,6 +485,7 @@ export function apply(ctx: Context, config: Config) {
     if (ctx.console) {
       // 注册控制台服务
       ctx.console.services['minimax-vits'] = new MinimaxVitsService(ctx, config)
+      logger.info('MiniMax VITS 控制台服务已注册')
     }
 
     try {
