@@ -1,3 +1,4 @@
+// src/index.ts
 // 主入口文件
 import { Context, Schema } from 'koishi'
 import type { Config as ConfigType } from './types'
@@ -8,6 +9,35 @@ import { generateSpeech, uploadFile, cloneVoice } from './api'
 import { fuzzyQuery, getMessageContent, makeAudioElement } from './utils'
 
 export const name = 'minimax-vits'
+
+// ==========================================
+// 模块 A：文本清洗 (过滤非对话内容)
+// ==========================================
+function cleanModelOutput(text: string): string {
+  if (!text) return ''
+  return text
+    // 1. 去除 DeepSeek/R1 等模型的思维链标签 (支持跨行)
+    .replace(/<\|im_start\|>[\s\S]*?<\|im_end\|>/g, '')
+    // 2. 去除括号内的动作、神态等非对话描写 (支持中英文括号)
+    .replace(/（[^）]*）/g, '')
+    .replace(/\([^)]*\)/g, '')
+    // 3. 去除星号内的动作描写
+    .replace(/\*([^*]*)\*/g, '')
+    // 4. 去除首尾空白
+    .trim()
+}
+
+// ==========================================
+// 模块 B：文本分段
+// ==========================================
+function splitTextIntoSegments(text: string): string[] {
+  if (!text) return []
+  // 使用正则表达式按句末标点(。！？.!?), 和换行符(\n)进行分割。
+  // 同时过滤掉分割后产生的空字符串。
+  const sentences = text.split(/[。！？.!?\n]+/).filter(s => s.trim().length > 0)
+  return sentences.map(s => s.trim())
+}
+
 
 // Koishi规范要求配置Schema必须命名为schema（小写）
 export const schema: Schema<ConfigType> = Schema.object({
@@ -73,6 +103,47 @@ export function apply(ctx: Context, config: ConfigType) {
     const ChatLunaPlugin = chatLunaModule.ChatLunaPlugin
     if (ChatLunaPlugin) {
       chatLunaPlugin = new ChatLunaPlugin(ctx, config as any, 'minimax-vits', false)
+
+      // ======================================================
+      // 核心：创建 MinimaxVitsTool 的子类以拦截和处理输出
+      // ======================================================
+      class FilteredMinimaxVitsTool extends MinimaxVitsTool {
+        // 修正：参数包含 toolConfig，且类型设为 any 以避免类型检查问题
+        async call(text: string, toolConfig: any): Promise<string> {
+          logger.info(`[ChatLuna TTS] 接收到原始文本: "${text}"`)
+
+          // 步骤 1: 清洗文本，移除动作、神态等非对话内容
+          const cleanedText = cleanModelOutput(text)
+          logger.info(`[ChatLuna TTS] 清洗后文本: "${cleanedText}"`)
+
+          if (!cleanedText) {
+            logger.info('[ChatLuna TTS] 清洗后无有效内容，跳过语音生成。')
+            return '' 
+          }
+
+          // 步骤 2: 将清洗后的文本分割成句子
+          const segments = splitTextIntoSegments(cleanedText)
+          logger.info(`[ChatLuna TTS] 文本分割成 ${segments.length} 段: ${JSON.stringify(segments)}`)
+
+          if (segments.length === 0) {
+            return ''
+          }
+          
+          // 步骤 3: 并发为每个句子生成音频
+          const audioElements = await Promise.all(
+            segments.map(async (segment) => {
+              // 修正：这里必须传入 toolConfig，否则 TS 报错
+              return super.call(segment, toolConfig)
+            })
+          )
+
+          // 步骤 4: 拼接结果
+          const result = audioElements.filter(Boolean).join(' ')
+          logger.info(`[ChatLuna TTS] 最终生成内容: ${result}`)
+          
+          return result
+        }
+      }
       
       // 注册 ChatLuna Tool
       try {
@@ -85,10 +156,11 @@ export function apply(ctx: Context, config: ConfigType) {
               )
             )
           },
-          createTool: () => new MinimaxVitsTool(ctx, config, cacheManager),
+          // 使用我们刚刚创建的、带过滤和分段功能的子类
+          createTool: () => new FilteredMinimaxVitsTool(ctx, config),
           authorization: () => true
         })
-        logger.info('ChatLuna Tool 已注册')
+        logger.info('ChatLuna Tool 已注册 (带过滤和分段功能)')
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : String(error)
         logger.warn('ChatLuna Tool 注册失败:', errorMessage)
@@ -102,15 +174,18 @@ export function apply(ctx: Context, config: ConfigType) {
   // 创建或更新缓存管理器
   if (config.cacheEnabled) {
     if (!state.cacheManager) {
+      // ！！！关键修改：使用对象传递参数，匹配新版 cache.ts
       state.cacheManager = new AudioCacheManager(
         config.cacheDir ?? './data/minimax-vits/cache',
         logger,
-        true,
-        config.cacheMaxAge ?? 3600000,
-        config.cacheMaxSize ?? 104857600
+        {
+          enabled: true,
+          maxAge: config.cacheMaxAge ?? 3600000,
+          maxSize: config.cacheMaxSize ?? 104857600
+        }
       );
       // 初始化缓存
-      state.cacheManager.initialize().catch(err => {
+      state.cacheManager.initialize().catch((err: any) => {
         logger.warn('缓存初始化失败:', err);
       });
     }
@@ -131,7 +206,7 @@ export function apply(ctx: Context, config: ConfigType) {
       // 如果服务实例已存在，更新其配置
       if (state.minimaxVitsService) {
         // 更新服务实例的配置
-        state.minimaxVitsService.updateConfig(config).catch(err => {
+        state.minimaxVitsService.updateConfig(config).catch((err: any) => {
           logger.warn('更新服务配置失败:', err);
         });
       } else {
@@ -149,18 +224,6 @@ export function apply(ctx: Context, config: ConfigType) {
             ctxWithConsole.console.services = ctxWithConsole.console.services || {};
             ctxWithConsole.console.services['minimax-vits'] = state.minimaxVitsService;
             logger.info('MiniMax VITS 控制台服务已注册（兼容模式）');
-          }
-          
-          // 注册控制台页面
-          if (typeof ctxWithConsole.console.addEntry === 'function') {
-            ctxWithConsole.console.addEntry({
-              id: 'minimax-vits',
-              order: 500,
-              title: 'MiniMax VITS',
-              icon: 'activity:microphone',
-              component: () => import('./console')
-            });
-            logger.info('MiniMax VITS 控制台页面已注册');
           }
         }
       }

@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-minimax-vits",
   "description": "自用，使用 minimax 国际版生成语音，适配 chatluna",
-  "version": "1.5.7",
+  "version": "1.5.8",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -9,10 +9,6 @@
     ".": {
       "types": "./lib/index.d.ts",
       "import": "./lib/index.js"
-    },
-    "./console": {
-      "types": "./lib/console.d.ts",
-      "import": "./lib/console.jsx"
     },
     "./package.json": "./package.json"
   },
@@ -28,8 +24,7 @@
     "minimax",
     "tts",
     "vits",
-    "chatluna",
-    "console"
+    "chatluna"
   ],
   "peerDependencies": {
     "@koishijs/plugin-console": "^5.16.0",
@@ -40,8 +35,8 @@
   },
   "devDependencies": {
     "@koishijs/client": "^5.16.0",
-    "@types/node": "^20.0.0",
     "@types/form-data": "^2.5.0",
+    "@types/node": "^20.0.0",
     "tsc-alias": "^1.8.0",
     "typescript": "^5.0.0",
     "vue": "^3.3.0"
@@ -68,10 +63,9 @@
   "homepage": "https://github.com/yushangjianghe-cell/minimax-vits.git",
   "koishi": {
     "description": {
-      "en": "MiniMax VITS TTS plugin with console UI",
-      "zh": "自用插件。带控制台界面的MiniMax VITS TTS插件"
+      "en": "MiniMax VITS TTS plugin",
+      "zh": "自用插件。MiniMax VITS TTS插件"
     },
-    "schema": true,
     "service": {
       "implements": [
         "minimax-vits"
