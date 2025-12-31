@@ -1,26 +1,26 @@
 <template>
-  <div style="padding: '20px', maxWidth: '800px'">
-    <h2 style="margin: '0 0 20px 0'">MiniMax VITS 语音合成</h2>
+  <div :style="{ padding: '20px', maxWidth: '800px' }">
+    <h2 :style="{ margin: '0 0 20px 0' }">MiniMax VITS 语音合成</h2>
     
-    <div style="marginBottom: '20px'">
+    <div :style="{ marginBottom: '20px' }">
       <h3>API 配置</h3>
-      <div style="display: 'flex', alignItems: 'center', marginBottom: '15px'">
-        <label style={{ width: '100px' }}>API Key:</label>
-        <div style={{ flex: 1 }}>
+      <div :style="{ display: 'flex', alignItems: 'center', marginBottom: '15px' }">
+        <label :style="{ width: '100px' }">API Key:</label>
+        <div :style="{ flex: 1 }">
           <input
             type="password"
-            style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
+            :style="{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }"
             v-model="config.ttsApiKey"
             placeholder="请输入MiniMax API Key"
           />
         </div>
       </div>
       
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '15px' }}>
-        <label style={{ width: '100px' }}>Group ID:</label>
-        <div style={{ flex: 1 }}>
+      <div :style="{ display: 'flex', alignItems: 'center', marginBottom: '15px' }">
+        <label :style="{ width: '100px' }">Group ID:</label>
+        <div :style="{ flex: 1 }">
           <input
-            style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
+            :style="{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }"
             v-model="config.groupId"
             placeholder="可选"
           />
@@ -28,13 +28,13 @@
       </div>
     </div>
     
-    <div style={{ marginBottom: '20px' }}>
+    <div :style="{ marginBottom: '20px' }">
       <h3>语音设置</h3>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '15px' }}>
-        <label style={{ width: '100px' }}>默认语音:</label>
-        <div style={{ flex: 1 }}>
+      <div :style="{ display: 'flex', alignItems: 'center', marginBottom: '15px' }">
+        <label :style="{ width: '100px' }">默认语音:</label>
+        <div :style="{ flex: 1 }">
           <select
-            style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
+            :style="{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }"
             v-model="config.defaultVoice"
           >
             <option v-for="voice in voices" :key="voice.value" :value="voice.value">{{ voice.label }}</option>
@@ -42,9 +42,9 @@
         </div>
       </div>
       
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '15px' }}>
-        <label style={{ width: '100px' }}>语速:</label>
-        <div style={{ flex: 1 }}>
+      <div :style="{ display: 'flex', alignItems: 'center', marginBottom: '15px' }">
+        <label :style="{ width: '100px' }">语速:</label>
+        <div :style="{ flex: 1 }">
           <input
             type="range"
             min="0.5"
@@ -57,34 +57,34 @@
       </div>
     </div>
     
-    <div style={{ marginBottom: '20px' }}>
+    <div :style="{ marginBottom: '20px' }">
       <h3>测试功能</h3>
-      <div style={{ marginBottom: '15px' }}>
-        <label style={{ display: 'block', marginBottom: '5px' }}>测试文本:</label>
+      <div :style="{ marginBottom: '15px' }">
+        <label :style="{ display: 'block', marginBottom: '5px' }">测试文本:</label>
         <textarea
-          style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc', minHeight: '100px' }}
+          :style="{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc', minHeight: '100px' }"
           v-model="testText"
           placeholder="输入要测试的文本"
         ></textarea>
       </div>
       
-      <div style={{ display: 'flex', gap: '10px' }}>
+      <div :style="{ display: 'flex', gap: '10px' }">
         <button
-          style={{ padding: '8px 16px', borderRadius: '4px', border: 'none', backgroundColor: '#409eff', color: 'white', cursor: 'pointer' }}
+          :style="{ padding: '8px 16px', borderRadius: '4px', border: 'none', backgroundColor: '#409eff', color: 'white', cursor: 'pointer' }"
           @click="testTTS"
           :disabled="isTesting"
         >
           {{ isTesting ? '测试中...' : '测试TTS' }}
         </button>
         <button
-          style={{ padding: '8px 16px', borderRadius: '4px', border: 'none', backgroundColor: '#67c23a', color: 'white', cursor: 'pointer' }}
+          :style="{ padding: '8px 16px', borderRadius: '4px', border: 'none', backgroundColor: '#67c23a', color: 'white', cursor: 'pointer' }"
           @click="saveConfig"
           :disabled="isSaving"
         >
           {{ isSaving ? '保存中...' : '保存配置' }}
         </button>
         <button
-          style={{ padding: '8px 16px', borderRadius: '4px', border: 'none', backgroundColor: '#909399', color: 'white', cursor: 'pointer' }}
+          :style="{ padding: '8px 16px', borderRadius: '4px', border: 'none', backgroundColor: '#909399', color: 'white', cursor: 'pointer' }"
           @click="validateApiKey"
         >
           验证API Key
@@ -92,11 +92,11 @@
       </div>
     </div>
     
-    <div v-if="saveStatus" style={{ marginBottom: '15px', padding: '10px', borderRadius: '4px', backgroundColor: '#f0f9eb', color: '#67c23a' }}>
+    <div v-if="saveStatus" :style="{ marginBottom: '15px', padding: '10px', borderRadius: '4px', backgroundColor: '#f0f9eb', color: '#67c23a' }">
       {{ saveStatus }}
     </div>
     
-    <div v-if="testResult" style={{ marginBottom: '15px', padding: '10px', borderRadius: '4px', backgroundColor: testResult.success ? '#f0f9eb' : '#fef0f0', color: testResult.success ? '#67c23a' : '#f56c6c' }}>
+    <div v-if="testResult" :style="{ marginBottom: '15px', padding: '10px', borderRadius: '4px', backgroundColor: testResult.success ? '#f0f9eb' : '#fef0f0', color: testResult.success ? '#67c23a' : '#f56c6c' }">
       {{ testResult.success ? '测试成功！' : `测试失败: ${testResult.error}` }}
     </div>
   </div>
@@ -180,8 +180,34 @@ const voices = ref([
 // 加载配置
 const loadConfig = () => {
   if (service.value) {
-    const currentConfig = service.value.getConfig()
-    Object.assign(config, currentConfig)
+    try {
+      const currentConfig = service.value.getConfig()
+      // 确保所有配置项都被正确赋值，包括空值
+      // 使用 Object.assign 确保所有字段都被覆盖，即使值为空字符串或 undefined
+      Object.assign(config, {
+        ttsApiKey: currentConfig.ttsApiKey ?? '',
+        groupId: currentConfig.groupId ?? '',
+        apiBase: currentConfig.apiBase ?? 'https://api.minimax.io/v1',
+        defaultVoice: currentConfig.defaultVoice ?? 'Chinese_female_gentle',
+        speechModel: currentConfig.speechModel ?? 'speech-01-turbo',
+        speed: currentConfig.speed ?? 1.0,
+        vol: currentConfig.vol ?? 1.0,
+        pitch: currentConfig.pitch ?? 0,
+        audioFormat: currentConfig.audioFormat ?? 'mp3',
+        sampleRate: currentConfig.sampleRate ?? 32000,
+        bitrate: currentConfig.bitrate ?? 128000,
+        outputFormat: currentConfig.outputFormat ?? 'hex',
+        languageBoost: currentConfig.languageBoost ?? 'auto',
+        debug: currentConfig.debug ?? false,
+        voiceCloneEnabled: currentConfig.voiceCloneEnabled ?? false,
+        cacheEnabled: currentConfig.cacheEnabled ?? true,
+        cacheDir: currentConfig.cacheDir ?? './data/minimax-vits/cache',
+        cacheMaxAge: currentConfig.cacheMaxAge ?? 3600000,
+        cacheMaxSize: currentConfig.cacheMaxSize ?? 104857600,
+      })
+    } catch (error: any) {
+      console.error('加载配置失败:', error)
+    }
   }
 }
 
@@ -253,6 +279,14 @@ const validateApiKey = async () => {
 
 // 初始化时加载配置
 onMounted(() => {
-  loadConfig()
+  // 延迟加载，确保服务已准备好
+  setTimeout(() => {
+    loadConfig()
+  }, 100)
+  
+  // 监听服务变化
+  if (service.value) {
+    loadConfig()
+  }
 })
 </script>

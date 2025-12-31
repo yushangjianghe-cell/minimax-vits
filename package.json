@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-minimax-vits",
-  "description": "使用 minimax 国际版生成语音，适配 chatluna",
-  "version": "1.4.0",
+  "description": "自用，使用 minimax 国际版生成语音，适配 chatluna",
+  "version": "1.5.2",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -17,8 +17,6 @@
   },
   "files": [
     "lib",
-    "dist",
-    "client",
     "readme.md"
   ],
   "license": "MIT",
@@ -33,31 +31,32 @@
     "console"
   ],
   "peerDependencies": {
-    "koishi": "^4.18.10",
-    "@koishijs/plugin-console": "^5.16.0"
+    "@koishijs/plugin-console": "^5.16.0",
+    "koishi": "^4.18.10"
   },
   "dependencies": {
-    "@langchain/core": "^0.1.0",
-    "koishi-plugin-chatluna": "^1.0.0"
+    "form-data": "^4.0.0"
+  },
+  "devDependencies": {
+    "@koishijs/client": "^5.16.0",
+    "@types/form-data": "^2.5.0",
+    "@types/node": "^20.0.0",
+    "koishi": "^4.18.10",
+    "tsc-alias": "^1.8.0",
+    "typescript": "^5.0.0",
+    "vue": "^3.3.0"
+  },
+  "scripts": {
+    "build": "tsc && tsc-alias -p tsconfig.json",
+    "build:dev": "tsc --watch",
+    "clean": "rm -rf lib",
+    "prepublishOnly": "npm run build"
   },
   "inject": {
     "optional": [
       "console",
       "chatluna"
     ]
-  },
-  "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0",
-    "@koishijs/client": "^5.16.0",
-    "vue": "^3.3.0",
-    "@vue/tsconfig": "^0.5.0"
-  },
-  "scripts": {
-    "build:server": "tsc && tsc-alias",
-    "build:client": "koishi-console build",
-    "build": "yarn build:server && yarn build:client",
-    "dev": "tsc --watch"
   },
   "repository": {
     "type": "git",
@@ -70,11 +69,13 @@
   "koishi": {
     "description": {
       "en": "MiniMax VITS TTS plugin with console UI",
-      "zh": "带控制台界面的MiniMax VITS TTS插件"
+      "zh": "自用插件。带控制台界面的MiniMax VITS TTS插件"
     },
+    "schema": "./lib/index.js#schema",
     "service": {
-      "implements": ["minimax-vits"]
-    },
-    "browser": true
+      "implements": [
+        "minimax-vits"
+      ]
+    }
   }
 }

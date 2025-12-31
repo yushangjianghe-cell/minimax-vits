@@ -1,240 +1,18 @@
-import { Context, Schema, h } from 'koishi'
-import type { } from '@koishijs/plugin-console'
-import { Tool } from '@langchain/core/tools'
-import * as fs from 'fs'
-import * as path from 'path'
-import * as crypto from 'crypto'
-import { ChatLunaPlugin } from 'koishi-plugin-chatluna/services/chat'
-
-// --- 接口定义 ---
-interface ChatLunaToolRunnable {
-  configurable: {
-    session: any
-  }
-}
-
-// --- 辅助函数 ---
-function fuzzyQuery(text: string, keywords: string[]): boolean {
-  const lowerText = text.toLowerCase()
-  return keywords.some(keyword => lowerText.includes(keyword.toLowerCase()))
-}
-
-function getMessageContent(content: any): string {
-  if (typeof content === 'string') return content
-  if (content && typeof content === 'object') {
-    return content.text || content.content || JSON.stringify(content)
-  }
-  return String(content)
-}
-
-declare module '@koishijs/plugin-console' {
-  namespace Console {
-    interface Services {
-      'minimax-vits': MinimaxVitsService
-    }
-  }
-}
-
-function extractDialogueContent(text: string): string | null {
-  const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0)
-  let dialogueContent = ''
-  let inDialogue = false
-
-  for (const line of lines) {
-    const isDialogueLine =
-      line.startsWith('"') ||
-      line.startsWith("'") ||
-      line.includes('说：') ||
-      line.match(/^[A-Za-z\u4e00-\u9fff]+[：:]/)
-
-    const isNonDialogue =
-      (line.includes('（') && line.includes('）')) ||
-      (line.includes('(') && line.includes(')')) ||
-      line.match(/^\s*[\[\{【（(]/)
-
-    if (isDialogueLine && !isNonDialogue) {
-      let cleanLine = line
-        .replace(/^["\'"']/, '')
-        .replace(/["\'"']$/, '')
-        .replace(/^[A-Za-z\u4e00-\u9fff]+[：:]\s*/, '')
-        .replace(/说：|说道：/g, '')
-        .trim()
-
-      if (cleanLine.length > 0) {
-        dialogueContent += cleanLine + '。'
-        inDialogue = true
-      }
-    } else if (inDialogue && line.length > 0 && !isNonDialogue) {
-      dialogueContent += line + '。'
-    }
-  }
-
-  if (dialogueContent.length > 0) return dialogueContent.replace(/。+/g, '。').trim()
-  if (text.length <= 150 && !text.match(/[[{【（(]/)) return text
-  return null
-}
-
-// --- 辅助：构建音频消息元素 ---
-function makeAudioElement(buffer: Buffer, format: string) {
-  const mimeType = format === 'wav' ? 'audio/wav' : 'audio/mpeg'
-  const src = `data:${mimeType};base64,${buffer.toString('base64')}`
-  return h('audio', { src })
-}
-
-// --- ChatLuna Tool 类 ---
-export class MinimaxVitsTool {
-  name = 'minimax_tts'
-  description = `Use this tool to generate speech/audio from text using MiniMax TTS.
-  Input MUST be a JSON string: {"text": "required content", "voice": "optional_id", "speed": 1.0}`
-
-  constructor(
-    private ctx: Context,
-    private config: Config,
-    private cacheManager?: AudioCacheManager
-  ) {}
-
-  async call(input: string, toolConfig: any) {
-    try {
-      const session = toolConfig?.configurable?.session
-      if (!session) {
-        throw new Error('Session not found in tool config')
-      }
-
-      let params: any = {}
-      try {
-        params = JSON.parse(input)
-      } catch {
-        params = { text: input }
-      }
-      
-      let text = params.text || input
-      if (typeof text === 'object') text = JSON.stringify(text)
-
-      const voiceId = (params.voice || this.config.defaultVoice) ?? 'Chinese_female_gentle'
-      const speed = params.speed ?? this.config.speed ?? 1.0
-      
-      const dialogueText = extractDialogueContent(text)
-      if (!dialogueText) return `未检测到有效对话内容。`
-
-      const audioBuffer = await generateSpeech(this.ctx, { 
-        ...this.config, 
-        speed, 
-        vol: params.vol, 
-        pitch: params.pitch 
-      }, dialogueText, voiceId, this.cacheManager)
-
-      if (!audioBuffer) return `TTS 生成失败。`
-
-      await session.send(makeAudioElement(audioBuffer, this.config.audioFormat ?? 'mp3'))
-
-      return `Audio generated and sent.`
-    } catch (e: any) {
-      return `Error: ${e.message}`
-    }
-  }
-
-  // 兼容ChatLuna的工具接口
-  async invoke(input: any, options?: any) {
-    return this.call(JSON.stringify(input), options)
-  }
-  
-  // 兼容ChatLuna的工具接口
-  get lc_namespace() {
-    return ['minimax', 'tts']
-  }
-}
-
-// --- Console Service ---
-class MinimaxVitsService {
-  constructor(private ctx: Context, private config: Config) { }
-  
-  // 获取当前配置
-  getConfig() {
-    return { ...this.config }
-  }
-  
-  // 更新配置
-  updateConfig(newConfig: Partial<Config>) {
-    Object.assign(this.config, newConfig)
-    return this.getConfig()
-  }
-  
-  // 测试TTS
-  async testTTS(text: string, voice?: string, speed?: number) {
-    try {
-      const audioBuffer = await generateSpeech(this.ctx, {
-        ...this.config,
-        speed: speed ?? 1.0
-      }, text, voice || 'Chinese_female_gentle')
-
-      if (audioBuffer) {
-        return {
-          success: true,
-          audio: `data:audio/mpeg;base64,${audioBuffer.toString('base64')}`,
-          size: audioBuffer.length
-        }
-      }
-      return { success: false, error: '生成失败' }
-    } catch (error: any) {
-      return { success: false, error: error.message }
-    }
-  }
-  
-  // 获取可用语音列表
-  getAvailableVoices() {
-    return [
-      'Chinese_female_gentle',
-      'Chinese_female_vitality',
-      'Chinese_male_calm',
-      'Chinese_male_young',
-      'English_female_casual',
-      'English_male_professional'
-    ]
-  }
-  
-  // 验证API Key
-  async validateApiKey(apiKey: string) {
-    try {
-      // 简单验证，检查API Key格式
-      if (!apiKey || apiKey.length < 10) {
-        return { valid: false, message: 'API Key格式无效' }
-      }
-      
-      // 可以添加更复杂的验证，例如调用API检查
-      return { valid: true, message: 'API Key格式有效' }
-    } catch (error: any) {
-      return { valid: false, message: error.message }
-    }
-  }
-}
+// 主入口文件
+import { Context, Schema } from 'koishi'
+import type { Config as ConfigType } from './types'
+import { AudioCacheManager } from './cache'
+import { MinimaxVitsTool } from './tool'
+import { MinimaxVitsService } from './service'
+import { generateSpeech, uploadFile, cloneVoice } from './api'
+import { fuzzyQuery, getMessageContent, makeAudioElement } from './utils'
 
 export const name = 'minimax-vits'
 
-export interface Config {
-  ttsApiKey: string
-  groupId?: string
-  apiBase?: string
-  defaultVoice?: string
-  speechModel?: string
-  speed?: number
-  vol?: number
-  pitch?: number
-  audioFormat?: 'mp3' | 'wav'
-  sampleRate?: 16000 | 24000 | 32000 | 44100 | 48000
-  bitrate?: 64000 | 96000 | 128000 | 192000 | 256000
-  outputFormat?: 'hex'
-  languageBoost?: 'auto' | 'zh' | 'en'
-  debug?: boolean
-  voiceCloneEnabled?: boolean
-  cacheEnabled?: boolean
-  cacheDir?: string
-  cacheMaxAge?: number
-  cacheMaxSize?: number
-}
-
-export const Config: Schema<Config> = Schema.object({
-  ttsApiKey: Schema.string().required().description('MiniMax TTS API Key').role('secret'),
-  groupId: Schema.string().description('MiniMax Group ID'),
+// Koishi规范要求配置Schema必须命名为schema（小写）
+export const schema: Schema<ConfigType> = Schema.object({
+  ttsApiKey: Schema.string().default('your-api-key-here').description('MiniMax TTS API Key').role('secret'),
+  groupId: Schema.string().default('your-group-id-here').description('MiniMax Group ID'),
   apiBase: Schema.string().default('https://api.minimax.io/v1').description('API 基础地址'),
   defaultVoice: Schema.string().default('Chinese_female_gentle').description('默认语音 ID'),
   speechModel: Schema.string().default('speech-01-turbo').description('TTS 模型 (推荐 speech-01-turbo)'),
@@ -259,7 +37,7 @@ export const Config: Schema<Config> = Schema.object({
     Schema.const(192000),
     Schema.const(256000)
   ]).default(128000).description('比特率'),
-  outputFormat: Schema.const('hex').description('API输出编码 (必须是 hex)'),
+  outputFormat: Schema.const('hex').default('hex').description('API输出编码 (必须是 hex)'),
   languageBoost: Schema.union([
     Schema.const('auto').description('自动'),
     Schema.const('zh').description('中文'),
@@ -273,238 +51,136 @@ export const Config: Schema<Config> = Schema.object({
   cacheMaxSize: Schema.number().default(104857600).min(1048576).max(1073741824).description('缓存最大体积(bytes)'),
 }).description('MiniMax VITS 配置')
 
-// --- 缓存管理器 ---
-class AudioCacheManager {
-  constructor(
-    private cacheDir: string,
-    private logger: any,
-    private enabled: boolean,
-    private maxAge: number,
-    private maxSize: number
-  ) {}
-
-  async initialize() {
-    if (!this.enabled) return
-    if (!fs.existsSync(this.cacheDir)) fs.mkdirSync(this.cacheDir, { recursive: true })
-  }
-
-  async getAudio(text: string, voice: string, format: string): Promise<Buffer | null> {
-    if (!this.enabled) return null
-    try {
-      const hash = crypto.createHash('md5').update(`${text}-${voice}-${format}`).digest('hex')
-      const filePath = path.join(this.cacheDir, `${hash}.${format}`)
-      if (fs.existsSync(filePath)) return fs.readFileSync(filePath)
-    } catch {}
-    return null
-  }
-
-  async saveAudio(buffer: Buffer, text: string, voice: string, format: string) {
-    if (!this.enabled || !buffer.length) return
-    try {
-      const hash = crypto.createHash('md5').update(`${text}-${voice}-${format}`).digest('hex')
-      const filePath = path.join(this.cacheDir, `${hash}.${format}`)
-      fs.writeFileSync(filePath, buffer)
-    } catch (e) {
-      this.logger.warn('缓存写入失败', e)
-    }
-  }
-
-  dispose() {}
-}
-
-// --- 核心功能函数 ---
-
-async function generateSpeech(
-  ctx: Context,
-  config: Config,
-  text: string,
-  voice: string,
-  cacheManager?: AudioCacheManager
-): Promise<Buffer | null> {
-  const logger = ctx.logger('minimax-vits')
-  const format = config.audioFormat ?? 'mp3'
-
-  if (cacheManager) {
-    const cached = await cacheManager.getAudio(text, voice, format)
-    if (cached) {
-      if (config.debug) logger.debug('命中本地缓存')
-      return cached
-    }
-  }
-
-  try {
-    const headers: any = {
-      'Authorization': `Bearer ${config.ttsApiKey}`,
-      'Content-Type': 'application/json',
-    }
-    if (config.groupId) headers['GroupId'] = config.groupId
-
-    const payload: any = {
-      model: config.speechModel ?? 'speech-01-turbo',
-      text: text,
-      stream: false,
-      output_format: 'hex',
-      voice_setting: {
-        voice_id: voice,
-        speed: config.speed ?? 1.0,
-        vol: config.vol ?? 1.0,
-        pitch: config.pitch ?? 0
-      },
-      audio_setting: {
-        sample_rate: config.sampleRate ?? 32000,
-        bitrate: config.bitrate ?? 128000,
-        format: format,
-        channel: 1
-      }
-    }
-
-    if (config.languageBoost && config.languageBoost !== 'auto') {
-      payload.language_boost = config.languageBoost
-    }
-
-    if (config.debug) logger.debug(`调用 API: ${config.apiBase}/t2a_v2`)
-
-    const response = await ctx.http.post(`${config.apiBase}/t2a_v2`, payload, { headers, timeout: 60000 })
-
-    if (response?.base_resp && response.base_resp.status_code !== 0) {
-      logger.error(`API Error: ${response.base_resp.status_msg}`)
-      return null
-    }
-
-    const audioHex = response?.data?.audio || response?.audio
-    if (!audioHex) {
-      logger.error('API 返回数据中未找到 audio 字段')
-      return null
-    }
-
-    const audioBuffer = Buffer.from(audioHex, 'hex')
-    if (audioBuffer.length === 0) return null
-
-    if (cacheManager) {
-      await cacheManager.saveAudio(audioBuffer, text, voice, format)
-    }
-
-    return audioBuffer
-  } catch (error: any) {
-    logger.error('TTS 调用失败:', error)
-    return null
-  }
-}
-
-// 修正：返回值类型改为 string | undefined，匹配调用处的类型
-async function uploadFile(
-  ctx: Context,
-  config: Config,
-  filePath: string,
-  purpose: 'voice_clone' | 'prompt_audio'
-): Promise<string | undefined> {
-  const logger = ctx.logger('minimax-vits')
-  try {
-    const headers: any = { 'Authorization': `Bearer ${config.ttsApiKey}` }
-    if (config.groupId) headers['GroupId'] = config.groupId
-
-    const fileRes = await ctx.http.file(filePath)
-    
-    // 如果没有 Blob 类型（Node 低版本），需要 polyfill 或者忽略类型报错
-    // 此处假设环境支持，使用 new Blob 包装 buffer
-    const blob = new Blob([fileRes.data], { type: fileRes.mime })
-    
-    const formData = new FormData()
-    formData.append('file', blob, fileRes.filename || 'upload.mp3')
-    formData.append('purpose', purpose)
-
-    const response = await ctx.http.post(`${config.apiBase}/files/upload`, formData, { headers })
-    return response.file?.file_id || undefined
-  } catch (error: any) {
-    logger.error(`文件上传失败:`, error)
-    return undefined
-  }
-}
-
-// 语音克隆逻辑
-async function cloneVoice(
-  ctx: Context,
-  config: Config,
-  fileId: string,
-  voiceId: string,
-  promptAudioFileId?: string,
-  promptText?: string,
-  text?: string
-): Promise<Buffer | null> {
-  const logger = ctx.logger('minimax-vits')
-  try {
-    const payload: any = {
-      file_id: fileId,
-      voice_id: voiceId,
-      model: config.speechModel ?? 'speech-01-turbo',
-      audio_format: config.audioFormat ?? 'mp3',
-    }
-    if (text) payload.text = text
-    
-    if (promptAudioFileId && promptText) {
-      payload.clone_prompt = { prompt_audio: promptAudioFileId, prompt_text: promptText }
-    }
-
-    const headers: any = {
-      'Authorization': `Bearer ${config.ttsApiKey}`,
-      'Content-Type': 'application/json',
-    }
-    if (config.groupId) headers['GroupId'] = config.groupId
-
-    const response = await ctx.http.post<ArrayBuffer>(
-      `${config.apiBase}/voice_clone`,
-      payload,
-      { headers, responseType: 'arraybuffer' }
-    )
-    return Buffer.from(response)
-  } catch (error: any) {
-    logger.error('语音克隆失败:', error)
-    return null
-  }
-}
+// 兼容旧版本，保留Config导出
+export const Config = schema
 
 // --- 插件入口 ---
-export function apply(ctx: Context, config: Config) {
+export function apply(ctx: Context, config: ConfigType) {
+  // 使用 ctx.state 来存储服务实例的引用，而不是全局变量
+  const state = ctx.state as any;
+  
+  // 创建或获取缓存管理器
+  let cacheManager: AudioCacheManager | undefined;
   const logger = ctx.logger('minimax-vits')
   
-  // 修正：这里使用 config as any 规避类型检查，因为 ChatLunaPlugin 需要的某些配置字段（如 proxy）我们没有定义
-  const chatLunaPlugin = new ChatLunaPlugin(ctx, config as any, 'minimax-vits', false)
-
-  const cacheManager = config.cacheEnabled
-    ? new AudioCacheManager(
-        config.cacheDir ?? './data/minimax-vits/cache', 
-        logger, 
-        true, 
-        config.cacheMaxAge ?? 3600000, 
-        config.cacheMaxSize ?? 104857600
-      )
-    : undefined
-
-  ctx.on('ready', async () => {
-    await cacheManager?.initialize()
-    if (ctx.console) {
-      // 注册控制台服务
-      ctx.console.services['minimax-vits'] = new MinimaxVitsService(ctx, config)
-      logger.info('MiniMax VITS 控制台服务已注册')
+  // 动态导入 ChatLunaPlugin，避免类型错误
+  // 使用类型断言确保构建时不会报错
+  let chatLunaPlugin: any = null
+  
+  // 使用 Promise.then() 替代 await，因为 apply 函数不能是 async
+  // @ts-ignore - 忽略类型检查，因为 koishi-plugin-chatluna 可能未安装
+  import('koishi-plugin-chatluna/services/chat').then(chatLunaModule => {
+    const ChatLunaPlugin = chatLunaModule.ChatLunaPlugin
+    if (ChatLunaPlugin) {
+      chatLunaPlugin = new ChatLunaPlugin(ctx, config as any, 'minimax-vits', false)
+      
+      // 注册 ChatLuna Tool
+      try {
+        chatLunaPlugin.registerTool('minimax_tts', {
+          selector: (history: Array<{ content: unknown }>) => {
+            return history.some((item) =>
+              fuzzyQuery(
+                getMessageContent(item.content),
+                ['语音', '朗读', 'tts', 'speak', 'say', 'voice']
+              )
+            )
+          },
+          createTool: () => new MinimaxVitsTool(ctx, config, cacheManager),
+          authorization: () => true
+        })
+        logger.info('ChatLuna Tool 已注册')
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        logger.warn('ChatLuna Tool 注册失败:', errorMessage)
+      }
     }
-
-    try {
-      // 简化ChatLuna工具注册，避免类型复杂性
-      chatLunaPlugin.registerTool('minimax_tts', {
-        selector: (history: any) => history.some((item: any) => fuzzyQuery(
-          getMessageContent(item.content),
-          ['语音', '朗读', 'tts', 'speak', 'say', 'voice']
-        )),
-        createTool: () => new MinimaxVitsTool(ctx, config, cacheManager) as any,
-        authorization: (session: any) => true
-      })
-      logger.info('ChatLuna Tool 已注册')
-    } catch (e: any) {
-      logger.warn('ChatLuna Tool 注册失败', e.message)
-    }
+  }).catch(error => {
+    // ChatLuna 插件未安装，跳过
+    logger.debug('ChatLuna 插件未安装，跳过 Tool 注册')
   })
 
-  ctx.on('dispose', () => cacheManager?.dispose())
+  // 创建或更新缓存管理器
+  if (config.cacheEnabled) {
+    if (!state.cacheManager) {
+      state.cacheManager = new AudioCacheManager(
+        config.cacheDir ?? './data/minimax-vits/cache',
+        logger,
+        true,
+        config.cacheMaxAge ?? 3600000,
+        config.cacheMaxSize ?? 104857600
+      );
+      // 初始化缓存
+      state.cacheManager.initialize().catch(err => {
+        logger.warn('缓存初始化失败:', err);
+      });
+    }
+    cacheManager = state.cacheManager;
+  } else {
+    // 销毁缓存管理器
+    state.cacheManager?.dispose();
+    delete state.cacheManager;
+    cacheManager = undefined;
+  }
+
+  // 注册控制台服务和页面
+  ctx.inject(['console'], (injectedCtx) => {
+    try {
+      // 使用类型断言，告诉 TypeScript injectedCtx 包含 console 属性
+      const ctxWithConsole = injectedCtx as Context & { console?: any };
+      
+      // 如果服务实例已存在，更新其配置
+      if (state.minimaxVitsService) {
+        // 更新服务实例的配置
+        state.minimaxVitsService.updateConfig(config).catch(err => {
+          logger.warn('更新服务配置失败:', err);
+        });
+      } else {
+        // 创建服务实例
+        state.minimaxVitsService = new MinimaxVitsService(ctxWithConsole, config);
+        
+        // 注册控制台服务
+        if (ctxWithConsole.console) {
+          // 在 Koishi 4.x 中，使用 console.addService 注册服务
+          if (typeof ctxWithConsole.console.addService === 'function') {
+            ctxWithConsole.console.addService('minimax-vits', state.minimaxVitsService);
+            logger.info('MiniMax VITS 控制台服务已注册');
+          } else {
+            // 兼容旧版本
+            ctxWithConsole.console.services = ctxWithConsole.console.services || {};
+            ctxWithConsole.console.services['minimax-vits'] = state.minimaxVitsService;
+            logger.info('MiniMax VITS 控制台服务已注册（兼容模式）');
+          }
+          
+          // 注册控制台页面
+          if (typeof ctxWithConsole.console.addEntry === 'function') {
+            ctxWithConsole.console.addEntry({
+              id: 'minimax-vits',
+              order: 500,
+              title: 'MiniMax VITS',
+              icon: 'activity:microphone',
+              component: () => import('./console')
+            });
+            logger.info('MiniMax VITS 控制台页面已注册');
+          }
+        }
+      }
+    } catch (error) {
+      logger.warn('注册控制台服务或页面失败:', error);
+    }
+  });
+
+  ctx.on('ready', async () => {
+    // 初始化缓存
+    await cacheManager?.initialize();
+  });
+
+  ctx.on('dispose', () => {
+    // 清理缓存管理器
+    state.cacheManager?.dispose();
+    delete state.cacheManager;
+    // 清理服务实例
+    delete state.minimaxVitsService;
+  })
 
   // --- 指令注册区 ---
 
@@ -515,10 +191,16 @@ export function apply(ctx: Context, config: Config) {
       if (!text) return '请输入文本'
       await session?.send('生成中...')
       
-      const buffer = await generateSpeech(ctx, { 
-        ...config, 
-        speed: options?.speed ?? config.speed 
-      }, text, options?.voice || config.defaultVoice || 'Chinese_female_gentle', cacheManager)
+      const buffer = await generateSpeech(
+        ctx,
+        {
+          ...config,
+          speed: options?.speed ?? config.speed
+        },
+        text,
+        options?.voice || config.defaultVoice || 'Chinese_female_gentle',
+        cacheManager
+      )
       
       if (!buffer) return '失败'
       return makeAudioElement(buffer, config.audioFormat ?? 'mp3')
@@ -532,7 +214,9 @@ export function apply(ctx: Context, config: Config) {
     ctx.command('minivits.clone.upload <filePath> <purpose>', '上传文件')
       .action(async ({ session }, filePath, purpose) => {
         if (!session || !filePath || !purpose) return '缺少参数'
-        if (purpose !== 'voice_clone' && purpose !== 'prompt_audio') return '用途错误'
+        if (purpose !== 'voice_clone' && purpose !== 'prompt_audio') {
+          return '用途错误，必须是 voice_clone 或 prompt_audio'
+        }
         
         await session.send('上传中...')
         const fileId = await uploadFile(ctx, config, filePath, purpose)
@@ -546,7 +230,16 @@ export function apply(ctx: Context, config: Config) {
         if (!session || !fileId || !voiceId) return '缺少参数'
         await session.send('克隆中...')
         
-        const audioBuffer = await cloneVoice(ctx, config, fileId, voiceId, options?.promptAudio, options?.promptText, text)
+        const audioBuffer = await cloneVoice(
+          ctx,
+          config,
+          fileId,
+          voiceId,
+          options?.promptAudio,
+          options?.promptText,
+          text
+        )
+        
         if (!audioBuffer) return '克隆失败'
 
         if (text) {
@@ -573,10 +266,26 @@ export function apply(ctx: Context, config: Config) {
         }
 
         await session.send('3. 生成克隆语音...')
-        const audioBuffer = await cloneVoice(ctx, config, sourceFileId, voiceId, promptAudioFileId, options?.promptText, text)
+        const audioBuffer = await cloneVoice(
+          ctx,
+          config,
+          sourceFileId,
+          voiceId,
+          promptAudioFileId,
+          options?.promptText,
+          text
+        )
 
         if (!audioBuffer) return '语音克隆失败'
         return makeAudioElement(audioBuffer, config.audioFormat ?? 'mp3')
       })
   }
+}
+
+// 默认导出，确保Koishi能正确识别插件结构
+export default {
+  name,
+  schema,
+  Config,
+  apply
 }
