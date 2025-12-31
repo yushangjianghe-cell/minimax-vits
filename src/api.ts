@@ -12,6 +12,13 @@ export async function generateSpeech(
 ): Promise<Buffer | null> {
   const logger = ctx.logger('minimax-vits')
 
+  // 强制打印调用信息，便于排查为何无输出或无调用
+  try {
+    logger.info(`generateSpeech called — textLength=${text?.length ?? 0}, voiceId=${voiceId}`)
+  } catch (e) {
+    // ignore
+  }
+
   // 1. 尝试读取缓存
   if (cacheManager) {
     // 构造缓存参数标识
@@ -36,9 +43,11 @@ export async function generateSpeech(
       return null
     }
 
-    const payload = {
+    const payload: any = {
       model: config.speechModel,
       text: text,
+      stream: false, // 必填：非流式响应
+      output_format: 'hex', // 必填：hex 格式输出
       voice_setting: {
         voice_id: voiceId,
         speed: config.speed ?? 1.0,
@@ -50,13 +59,11 @@ export async function generateSpeech(
         bitrate: config.bitrate ?? 128000,
         format: config.audioFormat ?? 'mp3',
         channel: 1
-      },
-      language_boost: 'auto' // 默认值
+      }
     }
 
-    // 处理 languageBoost
+    // 仅在配置明确设置时添加 language_boost
     if (config.languageBoost && config.languageBoost !== 'auto') {
-      // @ts-ignore - 动态添加属性
       payload.language_boost = config.languageBoost
     }
 
@@ -64,8 +71,20 @@ export async function generateSpeech(
       logger.info(`请求 API: ${config.apiBase}/text_to_speech`)
     }
 
+    // 显式打印请求负载与头（使用 info 级别以确保可见），便于调试参数缺失问题
+    try {
+      logger.info('TTS 请求 payload:', JSON.stringify(payload))
+    } catch (e) {
+      logger.info('TTS 请求 payload (unserializable)')
+    }
+    logger.info('TTS 请求 headers:', {
+      Authorization: `Bearer ${config.ttsApiKey}`,
+      'Content-Type': 'application/json',
+      'Tts-Group-Id': config.groupId || ''
+    })
+
     const response = await ctx.http.post(
-      `${config.apiBase}/text_to_speech`,
+      `${config.apiBase}/t2a_v2`,
       payload,
       {
         headers: {
@@ -77,7 +96,61 @@ export async function generateSpeech(
       }
     )
 
-    const audioBuffer = Buffer.from(response)
+    // 响应可能是：
+    // 1. 直接的 MP3 二进制 (responseType: arraybuffer)
+    // 2. 或 JSON 响应包含 hex 编码的音频 (当返回类型被解析为 JSON 时)
+    
+    let audioData: Buffer | null = null
+    
+    // 尝试将响应作为 JSON 解析（如果 API 返回了 JSON 格式）
+    try {
+      const responseBuffer = Buffer.isBuffer(response) ? response : Buffer.from(response)
+      const responseText = responseBuffer.toString('utf8').trim()
+      
+      // 检查是否以 { 或 [ 开头，可能是 JSON
+      if (responseText.startsWith('{') || responseText.startsWith('[')) {
+        const obj = JSON.parse(responseText)
+        
+        // 检查是否是错误响应
+        if (obj.base_resp && obj.base_resp.status_code && obj.base_resp.status_code !== 0) {
+          logger.error('TTS API 错误:', obj.base_resp.status_msg || obj.base_resp.status_code)
+          return null
+        }
+        
+        // 检查是否是成功的 hex 编码音频响应
+        if (obj.data && obj.data.audio && typeof obj.data.audio === 'string') {
+          // 将 hex 字符串转换为 Buffer
+          audioData = Buffer.from(obj.data.audio, 'hex')
+          if (config.debug) {
+            logger.info(`从 JSON hex 响应解析音频，大小: ${audioData.length} 字节`)
+          }
+        } else {
+          // 其他 JSON 响应格式，记录但不处理
+          logger.warn('意外的 API 响应格式:', JSON.stringify(obj).slice(0, 200))
+          return null
+        }
+      } else {
+        // 直接的二进制数据（MP3）
+        audioData = responseBuffer
+        if (config.debug) {
+          logger.info(`获取二进制音频，大小: ${audioData.length} 字节`)
+        }
+      }
+    } catch (parseError) {
+      // 不是 JSON，当作二进制数据处理
+      const responseBuffer = Buffer.isBuffer(response) ? response : Buffer.from(response)
+      audioData = responseBuffer
+      if (config.debug) {
+        logger.info(`音频数据处理为二进制，大小: ${audioData.length} 字节`)
+      }
+    }
+    
+    if (!audioData || audioData.length === 0) {
+      logger.error('无效的音频数据')
+      return null
+    }
+    
+    const audioBuffer = audioData
 
     // 3. 写入缓存
     if (cacheManager && audioBuffer.length > 0) {
