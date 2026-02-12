@@ -24,6 +24,10 @@ export interface Config {
     chatLunaBotId?: string
     sendMode: 'voice_only' | 'text_and_voice' | 'mixed'
     minLength: number
+    selectorMode: 'full' | 'ai_sentence' | 'openai_filter'
+    openaiLikeBaseUrl?: string
+    openaiLikeApiKey?: string
+    openaiLikeModel?: string
   }
 
   // 功能开关
