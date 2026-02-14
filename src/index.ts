@@ -347,17 +347,14 @@ export function apply(ctx: Context, config: ConfigType) {
         const finalBuffer = Buffer.concat(validBuffers)
         const audioElem = makeAudioElement(finalBuffer, config.audioFormat ?? 'mp3')
 
-        switch (config.autoSpeech.sendMode) {
-          case 'voice_only':
-            await session.send(audioElem)
-            break
-          case 'mixed':
-            await session.send(aiText + audioElem)
-            break
-          case 'text_and_voice':
-          default:
-            await session.send(audioElem)
-            break
+        const sendMode = config.autoSpeech?.sendMode ?? 'text_and_voice'
+        
+        if (sendMode === 'voice_only') {
+          await session.send(audioElem)
+        } else if (sendMode === 'mixed') {
+          await session.send(targetText + audioElem)
+        } else {
+          await session.send(audioElem)
         }
 
         if (config.debug) logger.info('语音已发送')
