@@ -29,9 +29,8 @@
     "chatluna",
     "voice",
     "speech"
-  ]
+  ],
   "peerDependencies": {
-
     "@koishijs/plugin-console": "^5.16.0",
     "koishi": "^4.18.10"
   },

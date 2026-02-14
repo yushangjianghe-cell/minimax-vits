@@ -4,7 +4,7 @@ import { Context, Schema, h } from 'koishi'
 import type { Config as ConfigType } from './types'
 import { AudioCacheManager } from './cache'
 import { MinimaxVitsService } from './service'
-import { generateSpeech, uploadFile, cloneVoice } from './api'
+import { generateSpeech, uploadFile } from './api'
 import { makeAudioElement } from './utils'
 import { selectSpeechSentenceByAI } from './tool'
 
@@ -49,6 +49,32 @@ function splitTextIntoSegments(text: string): string[] {
 // ==========================================
 // 模块 C: 使用类 OpenAI 接口让小模型决策朗读内容
 // ==========================================
+const OPENAI_TIMEOUT = 15000
+const OPENAI_MAX_RETRIES = 2
+const OPENAI_RETRY_DELAY = 1000
+
+async function openaiSleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function shouldUseOpenAIFilter(text: string, minLength: number): boolean {
+  const sentences = text.split(/[。！？.!?\n]+/).filter(s => s.trim().length > 0)
+  
+  if (sentences.length <= 1) {
+    return false
+  }
+  
+  if (text.length > 500) {
+    return true
+  }
+  
+  if (sentences.length >= 3) {
+    return true
+  }
+  
+  return false
+}
+
 /**
  * 通过 OpenAI 兼容接口，让小模型从整段文本中挑选出需要朗读的内容。
  * - 返回 null / 空字符串：表示「不需要生成语音」
@@ -61,60 +87,80 @@ async function selectSpeechTextByOpenAI(
   logger: any,
 ): Promise<string | null> {
   const oa = config.autoSpeech as any
+  const minLen = config.autoSpeech?.minLength ?? 2
 
   if (!oa?.openaiLikeBaseUrl || !oa?.openaiLikeApiKey || !oa?.openaiLikeModel) {
     if (config.debug) logger?.warn('未配置完整的 OpenAI 类小模型参数，跳过小模型筛选')
     return null
   }
 
+  if (!shouldUseOpenAIFilter(text, minLen)) {
+    if (config.debug) logger?.info('文本较短或只有一句，跳过 OpenAI 小模型筛选')
+    return null
+  }
+
   let baseUrl = String(oa.openaiLikeBaseUrl).replace(/\/$/, '')
-  // 如果 baseUrl 已经以 /v1 结尾，则不再添加 /v1
   if (baseUrl.endsWith('/v1')) {
     baseUrl = baseUrl.slice(0, -3)
   }
   const url = `${baseUrl}/v1/chat/completions`
 
-  try {
-    const resp = await (ctx as any).http.post(url, {
-      model: oa.openaiLikeModel,
-      messages: [
-        {
-          role: 'system',
-          content:
-            '你是一个负责“文本转语音筛选”的助手。给你一整段聊天内容，请你只返回其中最适合朗读的一小段（可以是一句或几句），' +
-            '如果整段都不适合朗读（例如是思维链、代码块、系统提示等），就返回空字符串。不要解释，不要添加任何前后缀，只返回要朗读的内容本身。',
-        },
-        {
-          role: 'user',
-          content: text,
-        },
-      ],
-      temperature: 0.1,
-    }, {
-      headers: {
-        Authorization: `Bearer ${oa.openaiLikeApiKey}`,
-      },
-      timeout: 15000,
-    })
+  const systemPrompt = oa.customPrompt.trim()
 
-    const content: string | undefined =
-      resp?.choices?.[0]?.message?.content?.trim()
+  for (let attempt = 0; attempt <= OPENAI_MAX_RETRIES; attempt++) {
+    try {
+      const resp = await (ctx as any).http.post(url, {
+        model: oa.openaiLikeModel,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: text }
+        ],
+        temperature: 0.3,
+        max_tokens: 200,
+      }, {
+        headers: {
+          Authorization: `Bearer ${oa.openaiLikeApiKey}`,
+        },
+        timeout: OPENAI_TIMEOUT,
+      })
 
-    if (!content) {
-      if (config.debug) logger?.info('小模型返回为空，视为无需朗读')
+      const content: string | undefined = resp?.choices?.[0]?.message?.content?.trim()
+
+      if (!content) {
+        if (config.debug) logger?.info('小模型返回为空，视为无需朗读')
+        return null
+      }
+
+      const upperContent = content.toUpperCase()
+      if (upperContent === 'EMPTY' || upperContent === 'NONE' || upperContent === 'NULL') {
+        if (config.debug) logger?.info('小模型判断当前消息无需生成语音')
+        return null
+      }
+
+      const cleanedContent = content.replace(/^["'，。！？、:：]+|["'，。！？、:：]+$/g, '').trim()
+      
+      if (cleanedContent.length < minLen) {
+        if (config.debug) logger?.info(`小模型返回内容过短 (${cleanedContent.length} < ${minLen})，忽略`)
+        return null
+      }
+
+      if (config.debug) logger?.info(`小模型筛选结果: ${cleanedContent.slice(0, 30)}...`)
+      return cleanedContent
+
+    } catch (error: any) {
+      if (config.debug) logger?.warn(`OpenAI 小模型调用失败 (尝试 ${attempt + 1}/${OPENAI_MAX_RETRIES + 1}):`, error?.message || error)
+      
+      if (attempt < OPENAI_MAX_RETRIES) {
+        await openaiSleep(OPENAI_RETRY_DELAY)
+        continue
+      }
+      
+      logger?.warn('OpenAI 类小模型筛选语音内容失败，已达最大重试次数')
       return null
     }
-
-    if (content.toUpperCase() === 'EMPTY' || content.toUpperCase() === 'NONE') {
-      if (config.debug) logger?.info('小模型显式表示无需朗读')
-      return null
-    }
-
-    return content
-  } catch (error) {
-    logger?.warn('调用 OpenAI 类小模型筛选语音内容失败，将退回原有策略:', error)
-    return null
   }
+
+  return null
 }
 
 // 配置 Schema
@@ -154,9 +200,7 @@ export const schema: Schema<ConfigType> = Schema.object({
   
   // 新增：自动转语音相关配置
   autoSpeech: Schema.object({
-    enabled: Schema.boolean().default(false).description('启用自动文本转语音拦截'),
-    onlyChatLuna: Schema.boolean().default(true).description('仅拦截 ChatLuna 发出的消息'),
-    chatLunaBotId: Schema.string().description('ChatLuna 使用的 Bot ID (可选，若不填则尝试智能识别)'),
+    enabled: Schema.boolean().default(false).description('启用 ChatLuna 对话自动转语音'),
     sendMode: Schema.union([
       Schema.const('voice_only').description('仅发送语音'),
       Schema.const('text_and_voice').description('发送语音+文本(分两条)'),
@@ -179,10 +223,13 @@ export const schema: Schema<ConfigType> = Schema.object({
       .description('OpenAI 兼容接口 API Key'),
     openaiLikeModel: Schema.string()
       .description('用于筛选朗读内容的小模型名称，例如 gpt-4o-mini / deepseek-chat 等'),
+    customPrompt: Schema.string()
+      .role('textarea')
+      .default('你是一个专业的"语音内容筛选助手"。你的任务是从给定的聊天文本中挑选出最适合朗读的一段。\n\n筛选规则：\n1. 选择自然流畅、口语化的内容（对话、回答、叙述），偏向于情感表达的句子，比如"你好"、"我很喜欢你"等类似句子。\n2. 排除以下内容：\n   - 思维链、推理过程（如"让我想想..."、"因为...所以..."）\n   - 代码块、技术术语\n   - 系统提示、指令、引导语\n   - 重复的客套话\n3. 如果整段都不适合朗读，返回"EMPTY"\n\n输出要求：\n- 只返回选中的内容，不要添加任何解释、标点或引号\n- 如果不适合朗读，返回"EMPTY"\n- 返回内容长度控制在 20-100 字之间效果最佳')
+      .description('自定义 System Prompt（填写后会覆盖默认提示词）'),
   }).description('自动语音转换设置'),
 
   debug: Schema.boolean().default(false).description('启用调试日志'),
-  voiceCloneEnabled: Schema.boolean().default(false).description('启用语音克隆'),
   cacheEnabled: Schema.boolean().default(true).description('启用本地文件缓存'),
   cacheDir: Schema.string().default('./data/minimax-vits/cache').description('缓存路径'),
   cacheMaxAge: Schema.number().default(3600000).min(60000).description('缓存有效期(ms)'),
@@ -229,115 +276,93 @@ export function apply(ctx: Context, config: ConfigType) {
   // 我们不再尝试注册 ChatLuna Tool，而是直接监听所有发出的消息
   
   // ======================================================
-  // 2. 核心逻辑：消息拦截与自动语音转换
+  // 2. 核心逻辑：ChatLuna 对话后自动语音转换
   // ======================================================
-  // 我们不再尝试注册 ChatLuna Tool，而是直接监听所有发出的消息
+  // 使用 ChatLuna 的 after-chat 事件精确拦截 AI 对话
   
-  if (config.autoSpeech?.enabled) {
-    ctx.before('send', async (session) => {
-      // 2.1 基础检查
-      if (!session.content) return
-      
-      // 防止死循环：如果消息里已经包含音频元素，说明是我们生成的，或者已经是语音了
-      if (session.content.includes('<audio') || session.content.includes('[CQ:record')) {
-        return
-      }
-
-      // 2.2 过滤条件：是否仅拦截 ChatLuna
-      if (config.autoSpeech.onlyChatLuna && config.autoSpeech.chatLunaBotId) {
-        if (session.bot.selfId !== config.autoSpeech.chatLunaBotId) return
-      }
-
-      // 2.3 文本清洗与预检
-      const rawText = h.unescape(session.content) // 去除 HTML 转义
-      const cleanedText = cleanModelOutput(rawText)
-      
-      if (cleanedText.length < (config.autoSpeech.minLength ?? 2)) {
-        return 
-      }
-
-      // 2.4 使用策略选择要转换为语音的文本（整条 / AI 挑选一句）
-      let targetText = cleanedText
-
-      if (config.debug) {
-        logger.info(`当前 selectorMode: ${config.autoSpeech.selectorMode}, onlyChatLuna: ${config.autoSpeech.onlyChatLuna}`)
-      }
-
-      if (config.autoSpeech.selectorMode === 'ai_sentence') {
-        try {
-          const aiSelected = await selectSpeechSentenceByAI(ctx, config, cleanedText, logger)
-          if (aiSelected && aiSelected.length >= (config.autoSpeech.minLength ?? 2)) {
-            targetText = aiSelected
-            if (config.debug) logger.info(`AI 选择的语音句子: ${targetText.slice(0, 50)}...`)
-          } else if (config.debug) {
-            logger.info('AI 未找到合适的语音句子，使用整条文本')
-          }
-        } catch (error) {
-          logger.warn('调用 ChatLuna 模型选择语音句子失败，将使用整条文本:', error)
-        }
-      } else if (config.autoSpeech.selectorMode === 'openai_filter') {
-        try {
-          const selected = await selectSpeechTextByOpenAI(ctx, config, cleanedText, logger)
-          // 返回 null / 空字符串：视为「无需生成语音」
-          if (!selected || selected.trim().length < (config.autoSpeech.minLength ?? 2)) {
-            if (config.debug) logger.info('小模型判断当前消息无需生成语音，放行原文本')
-            return
-          }
-          targetText = selected.trim()
-          if (config.debug) logger.info(`小模型筛选后的朗读文本: ${targetText.slice(0, 50)}...`)
-        } catch (error) {
-          logger.warn('调用 OpenAI 类小模型筛选朗读内容失败，将使用整条文本:', error)
-        }
-      }
-
-      // 2.5 生成语音（对 targetText 做 TTS）
+  const autoSpeechEnabled = config.autoSpeech?.enabled
+  if (autoSpeechEnabled) {
+    ctx.on('ready', () => {
+      logger.info('ChatLuna 语音拦截已启动 (监听 chatluna/after-chat 事件)')
+    })
+    
+    ;(ctx as any).on('chatluna/after-chat', async (...args: any[]) => {
       try {
-        if (config.debug) logger.info(`检测到待转换文本: ${targetText.slice(0, 20)}...`)
+        if (config.debug) logger.info('接收到 chatluna/after-chat 事件, 参数:', args.map((a: any) => typeof a).join(', '))
         
-        // 分段处理长文本
+        // 根据文档: conversationId, sourceMessage, responseMessage, promptVariables, chatInterface, session
+        const conversationId = args[0]
+        const sourceMessage = args[1]
+        const responseMessage = args[2]
+        const promptVariables = args[3]
+        const chatInterface = args[4]
+        const session = args[5]
+        
+        if (!responseMessage?.content) {
+          if (config.debug) logger.info('无 responseMessage 内容')
+          return
+        }
+        
+        const aiText = cleanModelOutput(responseMessage.content)
+        if (aiText.length < (config.autoSpeech.minLength ?? 2)) {
+          if (config.debug) logger.info(`文本过短: ${aiText.length}`)
+          return
+        }
+
+        if (config.debug) logger.info(`ChatLuna 对话: ${aiText.slice(0, 30)}...`)
+
+        let targetText = aiText
+
+        if (config.autoSpeech.selectorMode === 'ai_sentence') {
+          try {
+            const aiSelected = await selectSpeechSentenceByAI(ctx, config, aiText, logger)
+            if (aiSelected && aiSelected.length >= (config.autoSpeech.minLength ?? 2)) {
+              targetText = aiSelected
+            }
+          } catch (error) {
+            logger.warn('AI 筛选句子失败:', error)
+          }
+        } else if (config.autoSpeech.selectorMode === 'openai_filter') {
+          try {
+            const selected = await selectSpeechTextByOpenAI(ctx, config, aiText, logger)
+            if (!selected || selected.trim().length < (config.autoSpeech.minLength ?? 2)) {
+              return
+            }
+            targetText = selected.trim()
+          } catch (error) {
+            logger.warn('OpenAI 筛选失败:', error)
+          }
+        }
+
         const segments = splitTextIntoSegments(targetText)
         if (segments.length === 0) return
 
-        // 并发生成音频
         const audioBuffers = await Promise.all(
-          segments.map(seg =>
-            generateSpeech(
-              ctx,
-              config,
-              seg,
-              config.defaultVoice,
-              cacheManager
-            )
-          )
+          segments.map(seg => generateSpeech(ctx, config, seg, config.defaultVoice, cacheManager))
         )
 
-        // 过滤失败的并合并 Buffer
         const validBuffers = audioBuffers.filter((b): b is Buffer => b !== null)
         if (validBuffers.length === 0) return
 
         const finalBuffer = Buffer.concat(validBuffers)
         const audioElem = makeAudioElement(finalBuffer, config.audioFormat ?? 'mp3')
 
-        // 根据模式发送
         switch (config.autoSpeech.sendMode) {
           case 'voice_only':
-            session.content = audioElem.toString()
+            await session.send(audioElem)
             break
           case 'mixed':
-            session.content += audioElem.toString()
+            await session.send(aiText + audioElem)
             break
           case 'text_and_voice':
           default:
-            if (session.channelId) {
-              await session.bot.sendMessage(session.channelId, audioElem)
-            }
+            await session.send(audioElem)
             break
         }
 
-        if (config.debug) logger.info('语音已注入发送队列')
+        if (config.debug) logger.info('语音已发送')
       } catch (err) {
-        logger.error('自动语音转换出错:', err)
-        // 出错不影响原文本发送
+        logger.error('语音转换出错:', err)
       }
     })
   }
@@ -406,17 +431,6 @@ export function apply(ctx: Context, config: ConfigType) {
       if (!buffer) return '失败'
       return makeAudioElement(buffer, config.audioFormat ?? 'mp3')
     })
-
-  // (保留其他指令...)
-  if (config.voiceCloneEnabled) {
-    ctx.command('minivits.clone.upload <filePath> <purpose>', '上传文件')
-      .action(async ({ session }, filePath, purpose) => {
-         // ... (保持原逻辑)
-         const fileId = await uploadFile(ctx, config, filePath, purpose as any)
-         return fileId ? `上传成功: ${fileId}` : '上传失败'
-      })
-      // ... (其他克隆指令省略，逻辑不变)
-  }
 }
 
 export default {

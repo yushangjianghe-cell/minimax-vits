@@ -20,19 +20,17 @@ export interface Config {
   // 新增：自动语音配置
   autoSpeech: {
     enabled: boolean
-    onlyChatLuna: boolean
-    chatLunaBotId?: string
     sendMode: 'voice_only' | 'text_and_voice' | 'mixed'
     minLength: number
     selectorMode: 'full' | 'ai_sentence' | 'openai_filter'
     openaiLikeBaseUrl?: string
     openaiLikeApiKey?: string
     openaiLikeModel?: string
+    customPrompt?: string
   }
 
   // 功能开关
   debug: boolean
-  voiceCloneEnabled: boolean
   
   // 缓存配置
   cacheEnabled: boolean
